@@ -80,14 +80,34 @@ def train(time_limit: int = 600, batch_size: int = 64, max_lr: float = 8e-4,
     model = GolfStudent().to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=max_lr, weight_decay=0.1)
 
-    # IterableDataset has no len() — estimate steps from empirical ~10 steps/sec RTX 6000
+    # ── EMA shadow model (same technique as leaderboard #1/#2/#3) ────────────
+    # Keeps a running average of weights — EMA checkpoint scores ~0.02 BPB better
+    ema_decay = 0.999
+    ema_state = {k: v.clone().float() for k, v in model.state_dict().items()}
+
+    def update_ema():
+        with torch.no_grad():
+            for k, v in model.state_dict().items():
+                ema_state[k].mul_(ema_decay).add_(v.float(), alpha=1 - ema_decay)
+
+    def save_ema():
+        ema_fp = CHECKPOINT.parent / "golf_best_ema.pt"
+        cpu_state = {k: v.half().cpu() for k, v in ema_state.items()}
+        torch.save({"model": cpu_state, "ema": True}, str(ema_fp))
+
+    # ── Scheduler: Cosine main + linear warmdown at 85% of budget ────────────
+    # Warmdown = rapid LR → 0 in the last 15% of training steps
+    # signalrush #1 used warmdown3500 — same concept
+    warmdown_frac = 0.15
     est_total_steps = time_limit * 10
+    warmdown_start  = int(est_total_steps * (1 - warmdown_frac))
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=est_total_steps, eta_min=max_lr * 0.01)
-    # GradScaler: only useful for CUDA (MPS has its own, CPU doesn't need it)
+        optimizer, T_max=warmdown_start, eta_min=max_lr * 0.05)
+
     scaler = torch.amp.GradScaler(device.type, enabled=(use_amp and device.type == "cuda"))
 
     t0, best, step = time.time(), float("inf"), 0
+    in_warmdown = False
     CHECKPOINT.parent.mkdir(parents=True, exist_ok=True)
 
     def _save(l):
@@ -95,14 +115,15 @@ def train(time_limit: int = 600, batch_size: int = 64, max_lr: float = 8e-4,
         torch.save({"model": raw.state_dict(), "step": step, "loss": l}, str(CHECKPOINT))
         print(f"  → best {l:.4f}")
 
-    signal.signal(signal.SIGINT, lambda s, f: (_save(best), sys.exit(0)))
+    signal.signal(signal.SIGINT, lambda s, f: (save_ema(), _save(best), sys.exit(0)))
 
     epoch = 0
     while True:
         epoch += 1
         el, es = 0.0, 0
         for batch in loader:
-            if time.time() - t0 >= time_limit:
+            elapsed = time.time() - t0
+            if elapsed >= time_limit:
                 break
             x, y = batch[:, :-1].to(device), batch[:, 1:].to(device)
             optimizer.zero_grad(set_to_none=True)
@@ -113,18 +134,34 @@ def train(time_limit: int = 600, batch_size: int = 64, max_lr: float = 8e-4,
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             scaler.step(optimizer); scaler.update()
-            if step < est_total_steps:
+
+            # ── LR schedule: cosine → warmdown ───────────────────────────────
+            if step < warmdown_start:
                 scheduler.step()
+            else:
+                # Linear warmdown: LR → 0 over remaining steps
+                if not in_warmdown:
+                    in_warmdown = True
+                    print(f"  [Warmdown] step={step}, LR decaying to 0")
+                remaining = max(1, est_total_steps - step)
+                for pg in optimizer.param_groups:
+                    pg["lr"] = max_lr * 0.05 * (remaining / (est_total_steps - warmdown_start))
+
+            # ── EMA update ───────────────────────────────────────────────────
+            update_ema()
+
             step += 1; el += loss.item(); es += 1
             if loss.item() < best:
                 best = loss.item(); _save(best)
         else:
             e = time.time() - t0
             ppl = math.exp(min(el / max(1, es), 20))
-            print(f"  Epoch {epoch:3d} | loss {el/max(1,es):.4f} | ppl {ppl:.1f} | {e:.0f}s")
+            lr_now = optimizer.param_groups[0]["lr"]
+            print(f"  Epoch {epoch:3d} | loss {el/max(1,es):.4f} | ppl {ppl:.1f} | lr {lr_now:.2e} | {e:.0f}s")
             continue
         break
 
+    save_ema()
     print(f"\n✅ Done | {step} steps | best loss {best:.4f}")
     if best == float("inf"):
         _save(best)
