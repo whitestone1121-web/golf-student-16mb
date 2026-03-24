@@ -1,0 +1,16 @@
+# Artifacts — not committed to public repo
+artifacts/fineweb_edu.jsonl
+artifacts/golf_best.pt
+artifacts/logit_cache.npz
+artifacts/export/
+artifacts/hf_cache/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+
+# Test files
+test_*.py
+golf_submission.zip
