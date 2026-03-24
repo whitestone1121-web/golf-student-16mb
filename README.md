@@ -27,18 +27,24 @@ A distillation student model for the [OpenAI Parameter Golf Challenge](https://g
 ## Quick Start
 
 ```bash
+# 1. Create and activate a virtual environment (avoids Python version conflicts on Mac)
+python3 -m venv venv
+source venv/bin/activate      # Mac/Linux
+# venv\Scripts\activate       # Windows
+
+# 2. Install dependencies
 pip install -r requirements.txt
 
-# 1. Download FineWeb-Edu slice (one-time, approx 500MB)
+# 3. Download FineWeb-Edu slice (one-time, approx 500MB)
 python3 download_fineweb.py --docs 50000
 
-# 2. Train BPE tokenizer
+# 4. Train BPE tokenizer
 python3 tokenizer.py --samples 50000
 
-# 3. Run 10-minute training sprint
+# 5. Run 10-minute training sprint
 python3 train.py --time-limit 600
 
-# 4. Package submission
+# 6. Package submission
 python3 export.py
 ```
 
