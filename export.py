@@ -22,8 +22,8 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 
-sys.path.insert(0, str(Path(__file__).parents[1]))
-from golf.model import GolfStudent, VOCAB_SIZE
+sys.path.insert(0, str(Path(__file__).parent))   # import model.py from same dir
+from model import GolfStudent, VOCAB_SIZE
 
 ARTIFACTS_DIR    = Path(__file__).parent / "artifacts"
 CHECKPOINT_PATH  = ARTIFACTS_DIR / "golf_best.pt"

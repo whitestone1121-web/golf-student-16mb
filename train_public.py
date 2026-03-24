@@ -57,8 +57,21 @@ class LazyFineWebDataset(torch.utils.data.IterableDataset):
 
 def train(time_limit: int = 600, batch_size: int = 64, max_lr: float = 8e-4,
           data: str = "fineweb_edu.jsonl"):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"[Train] {device} | {time_limit}s budget")
+    # ── Device detection (CUDA / MPS / CPU) ──────────────────────────────────
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+        amp_dtype = torch.bfloat16   # BF16: best on CUDA (Ampere+)
+        use_amp   = True
+    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        device = torch.device("mps")
+        amp_dtype = torch.float16    # MPS: no BF16 support yet
+        use_amp   = True
+    else:
+        device = torch.device("cpu")
+        amp_dtype = torch.float32
+        use_amp   = False
+
+    print(f"[Train] {device} ({amp_dtype}) | {time_limit}s budget")
 
     dataset = LazyFineWebDataset(data)
     loader  = DataLoader(dataset, batch_size=batch_size, shuffle=False, drop_last=True,
@@ -71,7 +84,8 @@ def train(time_limit: int = 600, batch_size: int = 64, max_lr: float = 8e-4,
     est_total_steps = time_limit * 10
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizer, T_max=est_total_steps, eta_min=max_lr * 0.01)
-    scaler = torch.amp.GradScaler("cuda", enabled=(device.type == "cuda"))
+    # GradScaler: only useful for CUDA (MPS has its own, CPU doesn't need it)
+    scaler = torch.amp.GradScaler(device.type, enabled=(use_amp and device.type == "cuda"))
 
     t0, best, step = time.time(), float("inf"), 0
     CHECKPOINT.parent.mkdir(parents=True, exist_ok=True)
@@ -92,7 +106,7 @@ def train(time_limit: int = 600, batch_size: int = 64, max_lr: float = 8e-4,
                 break
             x, y = batch[:, :-1].to(device), batch[:, 1:].to(device)
             optimizer.zero_grad(set_to_none=True)
-            with torch.amp.autocast("cuda", dtype=torch.bfloat16, enabled=(device.type == "cuda")):
+            with torch.amp.autocast(device.type, dtype=amp_dtype, enabled=use_amp):
                 logits = model(x)
                 loss = F.cross_entropy(logits.view(-1, VOCAB_SIZE), y.reshape(-1), ignore_index=0)
             scaler.scale(loss).backward()
@@ -121,7 +135,8 @@ if __name__ == "__main__":
     p.add_argument("--time-limit", type=int, default=600)
     p.add_argument("--batch-size", type=int, default=64)
     p.add_argument("--max-lr", type=float, default=8e-4)
-    p.add_argument("--data", default="fineweb_edu.jsonl",
-                   help="Path to local FineWeb-Edu JSONL file")
+    p.add_argument("--data",
+                   default=str(Path(__file__).parent / "artifacts" / "fineweb_edu.jsonl"),
+                   help="Path to FineWeb-Edu JSONL (run download_fineweb.py first)")
     a = p.parse_args()
     train(a.time_limit, a.batch_size, a.max_lr, a.data)
