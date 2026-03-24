@@ -81,19 +81,20 @@ def train(time_limit: int = 600, batch_size: int = 64, max_lr: float = 8e-4,
     optimizer = torch.optim.AdamW(model.parameters(), lr=max_lr, weight_decay=0.1)
 
     # ── EMA shadow model (same technique as leaderboard #1/#2/#3) ────────────
-    # Keeps a running average of weights — EMA checkpoint scores ~0.02 BPB better
+    # Keep EMA state on CPU float32 — avoids device/dtype conflicts in hot loop
     ema_decay = 0.999
-    ema_state = {k: v.clone().float() for k, v in model.state_dict().items()}
+    ema_state = {k: v.detach().cpu().float().clone()
+                 for k, v in model.state_dict().items()}
 
     def update_ema():
         with torch.no_grad():
             for k, v in model.state_dict().items():
-                ema_state[k].mul_(ema_decay).add_(v.float(), alpha=1 - ema_decay)
+                ema_state[k].mul_(ema_decay).add_(v.detach().cpu().float(), alpha=1.0 - ema_decay)
 
     def save_ema():
         ema_fp = CHECKPOINT.parent / "golf_best_ema.pt"
-        cpu_state = {k: v.half().cpu() for k, v in ema_state.items()}
-        torch.save({"model": cpu_state, "ema": True}, str(ema_fp))
+        torch.save({"model": {k: v.half() for k, v in ema_state.items()}, "ema": True}, str(ema_fp))
+        print(f"  [EMA] saved → {ema_fp.name}")
 
     # ── Scheduler: Cosine main + linear warmdown at 85% of budget ────────────
     # Warmdown = rapid LR → 0 in the last 15% of training steps
