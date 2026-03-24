@@ -247,8 +247,8 @@ def _build_hard_label_cache(
     top_k: int,
 ) -> None:
     """
-    Fast fallback: build training cache from UnifiedMemory DB episodes.
-    Uses the teacher's thought as input text and the GoalEngine action as label.
+    Fast fallback: build training cache from a local text DB.
+    Uses text as input and the action label as the hard target.
     Saves in same npz format as the soft-logit cache so train.py is unchanged.
 
     Action → one-hot soft label: [0, 0, ..., 1.0, ..., 0] for the target token.
@@ -261,7 +261,7 @@ def _build_hard_label_cache(
 
     tokenizer = _load_tokenizer(tokenizer_path)
 
-    # Simple action vocab to map GoalEngine actions to token ids in our BPE vocab
+    # Action vocab: maps action labels to token ids in our BPE vocab
     ACTIONS = [
         "explore_unknown", "observe_environment", "self_evolve",
         "respond_to_query", "alert_operator", "patrol", "analyze_threat", "idle",
