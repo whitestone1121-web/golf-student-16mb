@@ -21,24 +21,24 @@ A distillation student model for the [OpenAI Parameter Golf Challenge](https://g
 ## Highlights
 
 - **Weight-tied hybrid**: LinearRecurrence (O(L) time) + Attention (Flash Attention 2 via SDPA) interleaved every 3rd layer. Recurrence handles long-range state efficiently; attention provides global context.
-- **Custom 4k BPE**: Trained on FineWeb-Edu sample. Reclaims ~4MB vs standard 32k tokenizer — used for more model depth instead.
-- **Manual absmax INT8**: Replaces `torch.quantization.quantize_dynamic` (which adds ~4MB of metadata overhead). Pure weight bytes stored as compressed `.npz`.
+- **Custom 4k BPE**: Trained on FineWeb-Edu sample. Reclaims approx 4MB vs standard 32k tokenizer — used for more model depth instead.
+- **Manual absmax INT8**: Replaces `torch.quantization.quantize_dynamic` (which adds approx 4MB of metadata overhead). Pure weight bytes stored as compressed `.npz`.
 
 ## Quick Start
 
 ```bash
-pip install torch tokenizers datasets
+pip install -r requirements.txt
 
-# 1. Download FineWeb-Edu slice (run once, ~500MB)
+# 1. Download FineWeb-Edu slice (one-time, approx 500MB)
 python3 download_fineweb.py --docs 50000
 
 # 2. Train BPE tokenizer
 python3 tokenizer.py --samples 50000
 
 # 3. Run 10-minute training sprint
-python3 train.py --time-limit 600 --data artifacts/fineweb_edu.jsonl
+python3 train.py --time-limit 600
 
-# 4. Export submission
+# 4. Package submission
 python3 export.py
 ```
 
