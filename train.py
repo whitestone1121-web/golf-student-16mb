@@ -56,7 +56,7 @@ class LazyFineWebDataset(torch.utils.data.IterableDataset):
 
 
 def train(time_limit: int = 600, batch_size: int = 64, max_lr: float = 8e-4,
-          data: str = "fineweb_edu.jsonl"):
+          data: str = "fineweb_edu.jsonl", accum_steps: int = 4):
     # ── Device detection (CUDA / MPS / CPU) ──────────────────────────────────
     if torch.cuda.is_available():
         device = torch.device("cuda")
@@ -71,7 +71,7 @@ def train(time_limit: int = 600, batch_size: int = 64, max_lr: float = 8e-4,
         amp_dtype = torch.float32
         use_amp   = False
 
-    print(f"[Train] {device} ({amp_dtype}) | {time_limit}s budget")
+    print(f"[Train] {device} ({amp_dtype}) | {time_limit}s | bs={batch_size} accum={accum_steps} (eff={batch_size*accum_steps})")
 
     dataset = LazyFineWebDataset(data)
     loader  = DataLoader(dataset, batch_size=batch_size, shuffle=False, drop_last=True,
@@ -127,14 +127,20 @@ def train(time_limit: int = 600, batch_size: int = 64, max_lr: float = 8e-4,
             if elapsed >= time_limit:
                 break
             x, y = batch[:, :-1].to(device), batch[:, 1:].to(device)
-            optimizer.zero_grad(set_to_none=True)
+            # Gradient accumulation: only zero_grad at start of accumulation window
+            if step % accum_steps == 0:
+                optimizer.zero_grad(set_to_none=True)
             with torch.amp.autocast(device.type, dtype=amp_dtype, enabled=use_amp):
                 logits = model(x)
                 loss = F.cross_entropy(logits.view(-1, VOCAB_SIZE), y.reshape(-1), ignore_index=0)
-            scaler.scale(loss).backward()
-            scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            scaler.step(optimizer); scaler.update()
+            # Scale loss by 1/accum_steps so gradient magnitude is batch-size invariant
+            scaler.scale(loss / accum_steps).backward()
+
+            is_update_step = (step + 1) % accum_steps == 0
+            if is_update_step:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                scaler.step(optimizer); scaler.update()
 
             # ── LR schedule: cosine → warmdown ───────────────────────────────
             if step < warmdown_start:
@@ -148,7 +154,7 @@ def train(time_limit: int = 600, batch_size: int = 64, max_lr: float = 8e-4,
                 for pg in optimizer.param_groups:
                     pg["lr"] = max_lr * 0.05 * (remaining / (est_total_steps - warmdown_start))
 
-            # ── EMA update ───────────────────────────────────────────────────
+            # ── EMA update (every step) ──────────────────────────────────────
             update_ema()
 
             step += 1; el += loss.item(); es += 1
@@ -172,9 +178,11 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--time-limit", type=int, default=600)
     p.add_argument("--batch-size", type=int, default=64)
+    p.add_argument("--accum-steps", type=int, default=4,
+                   help="Gradient accumulation steps (effective batch = batch_size * accum_steps)")
     p.add_argument("--max-lr", type=float, default=8e-4)
     p.add_argument("--data",
                    default=str(Path(__file__).parent / "artifacts" / "fineweb_edu.jsonl"),
                    help="Path to FineWeb-Edu JSONL (run download_fineweb.py first)")
     a = p.parse_args()
-    train(a.time_limit, a.batch_size, a.max_lr, a.data)
+    train(a.time_limit, a.batch_size, a.max_lr, a.data, a.accum_steps)

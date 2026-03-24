@@ -45,7 +45,14 @@ def export(
     output_zip      = Path(output_zip)
     EXPORT_DIR.mkdir(parents=True, exist_ok=True)
 
-    print(f"[Export] Loading checkpoint: {checkpoint_path}")
+    # Prefer EMA checkpoint if available (scores ~0.02 BPB better than raw)
+    ema_path = checkpoint_path.parent / "golf_best_ema.pt"
+    if ema_path.exists() and checkpoint_path == CHECKPOINT_PATH:
+        print(f"[Export] Using EMA checkpoint: {ema_path.name}")
+        checkpoint_path = ema_path
+    else:
+        print(f"[Export] Loading checkpoint: {checkpoint_path}")
+
     if not checkpoint_path.exists():
         raise FileNotFoundError(
             f"Checkpoint not found: {checkpoint_path}\n"
